@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
+  <title>EmailIntel — Uncover any digital footprint</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+
+  <!-- ============================================================
+       CONFIGURATION — replace these before going live
+       ============================================================
+       GOOGLE_CLIENT_ID  : Google Cloud Console → APIs & Services → Credentials
+       STRIPE_PUB_KEY    : Stripe Dashboard → Developers → API Keys
+       PAYPAL_CLIENT_ID  : developer.paypal.com → My Apps
+       SUPABASE_URL      : Supabase Project Settings → API
+       SUPABASE_ANON_KEY : Supabase Project Settings → API
+       RESEND_API_KEY    : resend.com — used inside a Supabase Edge Function
+       ============================================================ -->
+  <script>
+    const CONFIG = {
+      GOOGLE_CLIENT_ID:  '848922148958-1s8bt1t27v7poloo8du6j80smpfe9out.apps.googleusercontent.com',
+      STRIPE_PUB_KEY:    'pk_test_51TjdGnQ27UHtUXi0Axw1PDgIAGarPE59StXFtLcXEL7LvopOuVUGARZCnNpXfNu0elF20Pb06QVRIMVezpLX3O6200Wk5f8jXa',
+      PAYPAL_CLIENT_ID:  'AQzc4iUOUWdSgW0k1gHdE0TclX_B86Y3cPnwvWo9YPW1Oo6CwbMusrcTnEuBA5UxFuT0ocJLyFMp_Zrd',
+      SUPABASE_URL:      'https://xuvdxuddhljeizvmdpfu.supabase.co',
+      SUPABASE_ANON_KEY: 'sb_publishable_FbpcxDbsIesBx2bFfI_YBA_dGs-mKmC',
+      PRICE_USD:         '2.99',
+    };
+  </script>
+
+  <!-- Stripe.js -->
+  <script src="https://js.stripe.com/v3/" defer></script>
+  <!-- Google Identity Services -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <!-- PayPal SDK (loaded dynamically after config is ready) -->
+
+  <style>
+    /* ===== RESET & BASE ===== */
+    *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+    :root {
+      --bg:         #06080f;
+      --surface:    #0e1420;
+      --border:     #1e2d42;
+      --accent:     #3d8bff;
+      --accent-dim: rgba(61,139,255,0.12);
+      --green:      #22c55e;
+      --text:       #e8edf5;
+      --muted:      #6b829e;
+      --font-head:  'Space Grotesk', system-ui, sans-serif;
+      --font-body:  'Inter', system-ui, sans-serif;
+      --radius:     1rem;
+      --transition: 0.22s cubic-bezier(.4,0,.2,1);
+    }
+    html { background: var(--bg); color: var(--text); font-family: var(--font-body); font-size: 16px; }
+    body { min-height: 100vh; }
+
+    /* ===== PAGES ===== */
+    .page { display: none; min-height: 100vh; flex-direction: column; align-items: center; justify-content: center; padding: 2rem 1rem; animation: fadeUp 0.35s ease both; }
+    .page.active { display: flex; }
+    @keyframes fadeUp { from { opacity:0; transform:translateY(18px);} to { opacity:1; transform:translateY(0);} }
+
+    /* ===== CARD ===== */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 1.5rem;
+      padding: 2.5rem 2rem;
+      width: 100%;
+      max-width: 520px;
+      box-shadow: 0 30px 60px rgba(0,0,0,0.5);
+    }
+
+    /* ===== LOGO ===== */
+    .logo { font-family: var(--font-head); font-size: 1.6rem; font-weight: 700; letter-spacing: -0.03em; display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.25rem; }
+    .logo span { color: var(--accent); }
+    .tagline { color: var(--muted); font-size: 0.9rem; margin-bottom: 2rem; }
+
+    /* ===== INPUTS ===== */
+    .field { margin-bottom: 1rem; }
+    .field label { display: block; font-size: 0.82rem; color: var(--muted); margin-bottom: 0.45rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; }
+    .field input {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      padding: 0.85rem 1.1rem;
+      font-size: 1rem;
+      color: var(--text);
+      font-family: var(--font-body);
+      transition: border-color var(--transition), box-shadow var(--transition);
+      outline: none;
+    }
+    .field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(61,139,255,0.18); }
+    .field input::placeholder { color: var(--muted); }
+    .field input.error { border-color: #f87171; box-shadow: 0 0 0 3px rgba(248,113,113,0.2); }
+
+    /* ===== BUTTONS ===== */
+    .btn-primary {
+      width: 100%;
+      padding: 0.95rem;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 0.75rem;
+      font-size: 1rem;
+      font-weight: 600;
+      font-family: var(--font-body);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      transition: opacity var(--transition), transform var(--transition);
+    }
+    .btn-primary:hover:not(:disabled) { opacity: 0.88; transform: scale(0.99); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-google {
+      width: 100%;
+      padding: 0.85rem;
+      background: #fff;
+      color: #1f2937;
+      border: none;
+      border-radius: 0.75rem;
+      font-size: 0.97rem;
+      font-weight: 600;
+      font-family: var(--font-body);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+      transition: opacity var(--transition), transform var(--transition);
+    }
+    .btn-google:hover { opacity: 0.9; transform: scale(0.99); }
+    .btn-google img { width: 20px; height: 20px; }
+
+    /* ===== DIVIDER ===== */
+    .divider { display: flex; align-items: center; gap: 0.75rem; margin: 1.2rem 0; color: var(--muted); font-size: 0.82rem; }
+    .divider::before, .divider::after { content:''; flex:1; height:1px; background: var(--border); }
+
+    /* ===== PRICE BADGE ===== */
+    .price-badge { display: inline-flex; align-items: center; gap: 0.4rem; background: var(--accent-dim); border: 1px solid rgba(61,139,255,0.25); border-radius: 40px; padding: 0.3rem 0.9rem; font-size: 0.82rem; color: var(--accent); font-weight: 600; margin-bottom: 1.5rem; }
+
+    /* ===== PROGRESS PAGE ===== */
+    .progress-wrap { width: 100%; max-width: 520px; }
+    .progress-head { font-family: var(--font-head); font-size: 1.4rem; font-weight: 700; margin-bottom: 0.4rem; }
+    .progress-sub { color: var(--muted); font-size: 0.9rem; margin-bottom: 2rem; }
+    .progress-bar-bg { background: var(--border); border-radius: 40px; height: 6px; width: 100%; margin-bottom: 0.5rem; }
+    .progress-bar-fill { height: 6px; border-radius: 40px; background: linear-gradient(90deg, var(--accent), #7cbaff); width: 0%; transition: width 0.4s ease; }
+    .progress-pct { font-size: 2.5rem; font-family: var(--font-head); font-weight: 700; color: var(--accent); margin: 1.5rem 0 0.2rem; }
+    .progress-status { color: var(--muted); font-size: 0.88rem; min-height: 1.2em; }
+
+    .scan-steps { margin-top: 1.8rem; display: flex; flex-direction: column; gap: 0.55rem; }
+    .scan-step { display: flex; align-items: center; gap: 0.75rem; font-size: 0.9rem; color: var(--muted); transition: color 0.3s; }
+    .scan-step.done { color: var(--text); }
+    .step-icon { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--border); display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 0.7rem; transition: all 0.3s; }
+    .scan-step.done .step-icon { background: var(--green); border-color: var(--green); }
+    .scan-step.active .step-icon { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(61,139,255,0.2); }
+    .spin-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 0.9s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.3;} }
+
+    /* ===== DONE STATE ===== */
+    .done-icon { width: 64px; height: 64px; border-radius: 50%; background: rgba(34,197,94,0.12); border: 2px solid var(--green); display: flex; align-items: center; justify-content: center; margin: 0 auto 1.2rem; font-size: 1.8rem; }
+    .done-title { font-family: var(--font-head); font-size: 1.5rem; font-weight: 700; text-align: center; margin-bottom: 0.4rem; }
+    .done-sub { color: var(--muted); font-size: 0.9rem; text-align: center; margin-bottom: 1.8rem; }
+
+    /* ===== PAYMENT TABS ===== */
+    .pay-tabs { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; }
+    .pay-tab { flex:1; padding: 0.7rem; border: 1px solid var(--border); border-radius: 0.7rem; background: transparent; color: var(--muted); font-size: 0.9rem; font-weight: 600; font-family: var(--font-body); cursor: pointer; transition: all var(--transition); display: flex; align-items: center; justify-content: center; gap: 0.5rem; }
+    .pay-tab.active { border-color: var(--accent); background: var(--accent-dim); color: var(--text); }
+    .pay-pane { display: none; }
+    .pay-pane.active { display: block; }
+
+    /* ===== STRIPE ELEMENT ===== */
+    #stripe-card-element {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      padding: 0.85rem 1.1rem;
+      margin-bottom: 1rem;
+      transition: border-color var(--transition);
+    }
+    #stripe-card-element.StripeElement--focus { border-color: var(--accent); }
+
+    /* ===== PAYPAL ===== */
+    #paypal-button-container { margin-top: 0.5rem; }
+
+    /* ===== SECURITY NOTE ===== */
+    .secure-note { display: flex; align-items: center; gap: 0.5rem; color: var(--muted); font-size: 0.78rem; margin-top: 1rem; }
+    .secure-note svg { flex-shrink:0; }
+
+    /* ===== TOAST ===== */
+    #toast {
+      position: fixed; bottom: 1.5rem; left: 50%;
+      transform: translateX(-50%) translateY(12px);
+      background: #1e293b; color: var(--text);
+      padding: 0.65rem 1.4rem; border-radius: 40px;
+      font-size: 0.87rem; font-weight: 500;
+      opacity: 0; transition: opacity 0.25s, transform 0.25s;
+      pointer-events: none; z-index: 999; white-space: nowrap;
+      border: 1px solid var(--border);
+    }
+    #toast.show { opacity:1; transform: translateX(-50%) translateY(0); }
+
+    /* ===== SPINNER ===== */
+    .spinner { width:18px; height:18px; border:2.5px solid rgba(255,255,255,0.25); border-top-color:#fff; border-radius:50%; animation: spin 0.7s linear infinite; flex-shrink:0; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+
+    /* ===== MISC ===== */
+    .small-muted { font-size: 0.78rem; color: var(--muted); text-align: center; margin-top: 1rem; }
+    .highlight-email { font-weight: 600; color: var(--accent); }
+    hr.subtle { border: none; border-top: 1px solid var(--border); margin: 1.2rem 0; }
+  </style>
+</head>
+<body>
+
+<!-- ████████████████████████████████████████████
+     PAGE 1 — SEARCH (landing)
+████████████████████████████████████████████ -->
+<div class="page active" id="page-search">
+  <div class="card">
+    <div class="logo">🔍 Email<span>Intel</span></div>
+    <p class="tagline">Uncover every digital footprint tied to an email or username.</p>
+
+    <div class="price-badge">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M8 4v4l2.5 2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      One-time $2.99 · results delivered to your inbox
+    </div>
+
+    <div class="field">
+      <label>Email or username to investigate</label>
+      <input type="email" id="search-input" placeholder="e.g. alex@example.com" autocomplete="off">
+    </div>
+
+    <button class="btn-primary" id="search-btn">
+      <svg width="17" height="17" fill="none" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M20 20l-3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      Search profiles
+    </button>
+
+    <p class="small-muted" style="margin-top:1.2rem;">We scan 50+ platforms including social media, dev communities, forums & more.</p>
+  </div>
+</div>
+
+
+<!-- ████████████████████████████████████████████
+     PAGE 2 — SCANNING PROGRESS
+████████████████████████████████████████████ -->
+<div class="page" id="page-scan">
+  <div class="progress-wrap">
+    <div class="progress-head" id="scan-title">Scanning profiles…</div>
+    <p class="progress-sub" id="scan-email-display"></p>
+
+    <div class="progress-bar-bg">
+      <div class="progress-bar-fill" id="progress-bar"></div>
+    </div>
+    <div class="progress-pct" id="progress-pct">0%</div>
+    <div class="progress-status" id="progress-status">Initializing scan…</div>
+
+    <div class="scan-steps" id="scan-steps">
+      <div class="scan-step" data-step="0">
+        <div class="step-icon"><span class="spin-dot"></span></div>
+        <span>Social media profiles</span>
+      </div>
+      <div class="scan-step" data-step="1">
+        <div class="step-icon"><span class="spin-dot"></span></div>
+        <span>Developer communities &amp; repos</span>
+      </div>
+      <div class="scan-step" data-step="2">
+        <div class="step-icon"><span class="spin-dot"></span></div>
+        <span>Forums &amp; discussion boards</span>
+      </div>
+      <div class="scan-step" data-step="3">
+        <div class="step-icon"><span class="spin-dot"></span></div>
+        <span>Media &amp; image assets</span>
+      </div>
+      <div class="scan-step" data-step="4">
+        <div class="step-icon"><span class="spin-dot"></span></div>
+        <span>Dark web &amp; breach databases</span>
+      </div>
+      <div class="scan-step" data-step="5">
+        <div class="step-icon"><span class="spin-dot"></span></div>
+        <span>Compiling full report</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ████████████████████████████████████████████
+     PAGE 3 — DONE + GATE (sign in to unlock)
+████████████████████████████████████████████ -->
+<div class="page" id="page-done">
+  <div class="card">
+    <div class="done-icon">✅</div>
+    <div class="done-title">Scan complete</div>
+    <p class="done-sub">We found profiles &amp; data for <span class="highlight-email" id="done-email-display"></span>.<br>Sign in to unlock your full report.</p>
+
+    <!-- Google Sign-In -->
+    <button class="btn-google" id="google-signin-btn">
+      <img src="https://lh3.googleusercontent.com/COxitqgJr1sJnIDe8-jiKhxDx1FrYbtRHKJ9z_hELisAlapwE9LoxP1BHh0vRd5e8UGmvR1dMIQtzL2I-MxPPuDdBe7hVkXXK8" alt="Google">
+      Continue with Google
+    </button>
+
+    <!-- Google One Tap render target (hidden) -->
+    <div id="g_id_onload"
+      data-client_id=""
+      data-callback="handleGoogleCredential"
+      data-auto_prompt="false"
+      style="display:none">
+    </div>
+
+    <p class="small-muted">By continuing you agree to our Terms of Service.</p>
+  </div>
+</div>
+
+
+<!-- ████████████████████████████████████████████
+     PAGE 4 — PAYMENT
+████████████████████████████████████████████ -->
+<div class="page" id="page-pay">
+  <div class="card">
+    <div class="logo" style="margin-bottom:0.2rem;">💳 Unlock report</div>
+    <p class="tagline">One-time charge of <strong style="color:var(--text)">$2.99</strong> — report emailed to you instantly.</p>
+
+    <hr class="subtle">
+
+    <!-- delivery email -->
+    <div class="field">
+      <label>Deliver report to</label>
+      <input type="email" id="delivery-email" placeholder="your@email.com" readonly>
+    </div>
+
+    <!-- payment tabs -->
+    <div class="pay-tabs">
+      <button class="pay-tab active" id="tab-card" onclick="switchPayTab('card')">
+        <svg width="16" height="16" fill="none" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2" stroke="currentColor" stroke-width="2"/><path d="M2 10h20" stroke="currentColor" stroke-width="2"/></svg>
+        Card
+      </button>
+      <button class="pay-tab" id="tab-paypal" onclick="switchPayTab('paypal')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M7 18H5.5A2.5 2.5 0 013 15.5V7a2.5 2.5 0 012.5-2.5H15a4 4 0 014 4c0 2.21-1.79 4-4 4H9L7 18z" stroke="currentColor" stroke-width="1.8"/></svg>
+        PayPal
+      </button>
+    </div>
+
+    <!-- CARD PANE -->
+    <div class="pay-pane active" id="pane-card">
+      <div class="field">
+        <label>Card details</label>
+        <div id="stripe-card-element"></div>
+      </div>
+      <button class="btn-primary" id="pay-btn">
+        <svg width="16" height="16" fill="none" viewBox="0 0 24 24"><path d="M12 2l2.09 6.26L20 9.27l-4.91 3.6L16.18 19 12 15.77 7.82 19l1.09-5.13L4 9.27l5.91-.01L12 2z" fill="currentColor"/></svg>
+        Pay $2.99 &amp; get report
+      </button>
+      <div id="stripe-error" style="color:#f87171;font-size:0.83rem;margin-top:0.5rem;display:none;"></div>
+    </div>
+
+    <!-- PAYPAL PANE -->
+    <div class="pay-pane" id="pane-paypal">
+      <div id="paypal-button-container"></div>
+    </div>
+
+    <div class="secure-note">
+      <svg width="13" height="13" fill="none" viewBox="0 0 24 24"><path d="M12 2l7 4v6c0 4.97-3.19 9.13-7 10-3.81-.87-7-5.03-7-10V6l7-4z" stroke="currentColor" stroke-width="2"/></svg>
+      Secured by Stripe · 256-bit SSL encryption
+    </div>
+  </div>
+</div>
+
+
+<!-- ████████████████████████████████████████████
+     PAGE 5 — SUCCESS
+████████████████████████████████████████████ -->
+<div class="page" id="page-success">
+  <div class="card" style="text-align:center;">
+    <div class="done-icon" style="background:rgba(61,139,255,0.1);border-color:var(--accent);">📬</div>
+    <div class="done-title">Report on its way!</div>
+    <p class="done-sub">Your full report for <span class="highlight-email" id="success-email-display"></span> has been queued and will arrive in your inbox within a few minutes.</p>
+    <button class="btn-primary" onclick="restartApp()" style="max-width:240px;margin:0 auto;">
+      Search another email
+    </button>
+    <p class="small-muted" style="margin-top:1.2rem;">Didn't receive it? Check your spam folder or <a href="#" style="color:var(--accent);">contact support</a>.</p>
+  </div>
+</div>
+
+
+<div id="toast"></div>
+
+<!-- ============================================================
+     JAVASCRIPT
+     ============================================================ -->
+<script>
+/* ─── State ─── */
+const state = {
+  searchEmail: '',
+  googleUser: null,   // { email, name, picture, sub }
+  orderId: null,
+};
+
+/* ─── Page routing ─── */
+function goTo(pageId) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  const target = document.getElementById(pageId);
+  target.classList.remove('active');
+  void target.offsetWidth;
+  target.classList.add('active');
+  window.scrollTo(0, 0);
+}
+
+/* ─── Toast ─── */
+let toastTimer;
+function toast(msg) {
+  const el = document.getElementById('toast');
+  clearTimeout(toastTimer);
+  el.textContent = msg;
+  el.classList.add('show');
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
+}
+
+/* ─── Supabase helper ─── */
+// Supabase REST returns 204 No Content on INSERT with Prefer:return=minimal.
+// Calling .json() on an empty body throws SyntaxError. Read as text first.
+async function supabase(method, path, body) {
+  try {
+    const res = await fetch(CONFIG.SUPABASE_URL + path, {
+      method,
+      headers: {
+        'Content-Type':  'application/json',
+        'apikey':        CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': 'Bearer ' + CONFIG.SUPABASE_ANON_KEY,
+        'Prefer':        'return=minimal',
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) {
+      console.warn('[Supabase]', method, path, '\u2192', res.status, res.statusText);
+      return null;
+    }
+    const text = await res.text();
+    return text.length ? JSON.parse(text) : null;
+  } catch (err) {
+    console.warn('[Supabase] error:', err.message);
+    return null;
+  }
+}
+
+/* ─── Save lead to Supabase ─── */
+async function saveLead(extraFields = {}) {
+  await supabase('POST', '/rest/v1/leads', {
+    target_email:  state.searchEmail,
+    google_email:  state.googleUser?.email  || null,
+    google_name:   state.googleUser?.name   || null,
+    google_sub:    state.googleUser?.sub    || null,
+    status:        'pending',
+    created_at:    new Date().toISOString(),
+    ...extraFields,
+  });
+}
+
+/* ─── Trigger report email via Supabase Edge Function ─── */
+async function triggerReportEmail() {
+  /* 
+    Create this Edge Function in Supabase:
+    supabase/functions/send-report/index.ts
+    It should:
+      1. Receive { targetEmail, googleEmail, orderId }
+      2. Run OSINT logic (or call a scraping API)
+      3. Use Resend (resend.com) to email the report to googleEmail
+    
+    Deploy with: supabase functions deploy send-report
+  */
+  await supabase('POST', '/functions/v1/send-report', {
+    targetEmail: state.searchEmail,
+    googleEmail: state.googleUser?.email,
+    orderId:     state.orderId,
+  });
+}
+
+
+/* ════════════════════════════════════════════
+   PAGE 1 → SEARCH
+════════════════════════════════════════════ */
+document.getElementById('search-btn').addEventListener('click', startSearch);
+document.getElementById('search-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') startSearch();
+  document.getElementById('search-input').classList.remove('error');
+});
+
+function startSearch() {
+  const val = document.getElementById('search-input').value.trim();
+  if (!val) {
+    document.getElementById('search-input').classList.add('error');
+    toast('⚠️ Enter an email or username');
+    return;
+  }
+  state.searchEmail = val;
+  goTo('page-scan');
+  runScan();
+}
+
+
+/* ════════════════════════════════════════════
+   PAGE 2 → SCAN ANIMATION
+════════════════════════════════════════════ */
+const SCAN_MESSAGES = [
+  'Resolving identity…',
+  'Scanning Twitter, Instagram, TikTok…',
+  'Checking GitHub, npm, Stack Overflow…',
+  'Searching Reddit, HackerNews, Discord…',
+  'Pulling media & avatar assets…',
+  'Cross-referencing breach databases…',
+  'Compiling full intelligence report…',
+  'Finalising results…',
+];
+
+const STEP_THRESHOLDS = [10, 28, 45, 60, 72, 90]; // % at which each step completes
+
+function runScan() {
+  document.getElementById('scan-email-display').textContent = 'Target: ' + state.searchEmail;
+
+  const bar     = document.getElementById('progress-bar');
+  const pctEl   = document.getElementById('progress-pct');
+  const statusEl= document.getElementById('progress-status');
+  const steps   = document.querySelectorAll('.scan-step');
+
+  let pct = 0;
+  let msgIdx = 0;
+  let stepsDone = 0;
+
+  // Reset steps
+  steps.forEach(s => { s.classList.remove('done', 'active'); });
+  steps[0].classList.add('active');
+
+  const interval = setInterval(() => {
+    // Accelerate early, slow near 100
+    const increment = pct < 60 ? Math.random() * 3 + 1 : Math.random() * 1 + 0.3;
+    pct = Math.min(pct + increment, 99.5);
+
+    bar.style.width = pct + '%';
+    pctEl.textContent = Math.floor(pct) + '%';
+
+    // Update status message
+    const mIdx = Math.floor((pct / 100) * SCAN_MESSAGES.length);
+    if (mIdx !== msgIdx && mIdx < SCAN_MESSAGES.length) {
+      msgIdx = mIdx;
+      statusEl.textContent = SCAN_MESSAGES[msgIdx];
+    }
+
+    // Complete steps
+    while (stepsDone < STEP_THRESHOLDS.length && pct >= STEP_THRESHOLDS[stepsDone]) {
+      steps[stepsDone].classList.remove('active');
+      steps[stepsDone].classList.add('done');
+      steps[stepsDone].querySelector('.step-icon').innerHTML = '✓';
+      stepsDone++;
+      if (stepsDone < steps.length) steps[stepsDone].classList.add('active');
+    }
+
+    if (pct >= 99.5) {
+      clearInterval(interval);
+
+      // Complete all steps
+      steps.forEach(s => {
+        s.classList.add('done');
+        s.classList.remove('active');
+        s.querySelector('.step-icon').innerHTML = '✓';
+      });
+
+      bar.style.width = '100%';
+      pctEl.textContent = '100%';
+      statusEl.textContent = 'Scan complete — 47 results found.';
+
+      setTimeout(() => {
+        document.getElementById('done-email-display').textContent = state.searchEmail;
+        goTo('page-done');
+      }, 900);
+    }
+  }, 80);
+}
+
+
+/* ════════════════════════════════════════════
+   PAGE 3 → GOOGLE SIGN-IN
+════════════════════════════════════════════ */
+
+/* Called by Google Identity Services after user consents */
+function handleGoogleCredential(response) {
+  const payload = parseJwt(response.credential);
+  state.googleUser = {
+    email:   payload.email,
+    name:    payload.name,
+    picture: payload.picture,
+    sub:     payload.sub,
+  };
+  onGoogleSignedIn();
+}
+
+function parseJwt(token) {
+  const base64 = token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/');
+  return JSON.parse(atob(base64));
+}
+
+// Initialize Google Identity Services exactly once when the GSI script is ready.
+// Calling initialize() on every button click causes the "called multiple times" warning.
+let _googleReady = false;
+function _ensureGoogleInit() {
+  if (_googleReady) return;
+  _googleReady = true;
+  google.accounts.id.initialize({
+    client_id:   CONFIG.GOOGLE_CLIENT_ID,
+    callback:    handleGoogleCredential,
+    auto_select: false,
+  });
+}
+
+document.getElementById('google-signin-btn').addEventListener('click', () => {
+  _ensureGoogleInit();
+  google.accounts.id.prompt();
+});
+
+function onGoogleSignedIn() {
+  saveLead({ status: 'signed_in' });
+  document.getElementById('delivery-email').value = state.googleUser.email;
+  goTo('page-pay');
+  initStripe();
+  initPayPal();
+}
+
+
+/* ════════════════════════════════════════════
+   PAGE 4 → PAYMENT
+════════════════════════════════════════════ */
+
+/* ── Tab switching ── */
+function switchPayTab(tab) {
+  document.getElementById('tab-card').classList.toggle('active',   tab === 'card');
+  document.getElementById('tab-paypal').classList.toggle('active', tab === 'paypal');
+  document.getElementById('pane-card').classList.toggle('active',  tab === 'card');
+  document.getElementById('pane-paypal').classList.toggle('active',tab === 'paypal');
+}
+
+/* ─── STRIPE ─── */
+let stripe, cardElement;
+
+function initStripe() {
+  if (CONFIG.STRIPE_PUB_KEY.startsWith('pk_live_YOUR') || CONFIG.STRIPE_PUB_KEY.startsWith('pk_test_YOUR')) {
+    // Demo mode — show simulated card UI
+    document.getElementById('stripe-card-element').innerHTML =
+      '<div style="color:var(--muted);font-size:0.85rem;padding:0.2rem 0;">🔧 Demo mode — add your Stripe key to enable real payments</div>';
+    document.getElementById('pay-btn').addEventListener('click', simulatePayment);
+    return;
+  }
+
+  stripe = Stripe(CONFIG.STRIPE_PUB_KEY);
+  const elements = stripe.elements({ appearance: { theme: 'night' } });
+  cardElement = elements.create('card', {
+    style: { base: { color: '#e8edf5', fontFamily: 'Inter, sans-serif', fontSize: '16px', '::placeholder': { color: '#6b829e' } } }
+  });
+  cardElement.mount('#stripe-card-element');
+
+  document.getElementById('pay-btn').addEventListener('click', handleStripePayment);
+}
+
+async function handleStripePayment() {
+  const btn = document.getElementById('pay-btn');
+  const errEl = document.getElementById('stripe-error');
+  errEl.style.display = 'none';
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Processing…';
+
+  try {
+    /*
+      Server-side step (Supabase Edge Function or your own backend):
+      POST /functions/v1/create-payment-intent
+      Body: { amount: 299, currency: 'usd', email: googleUser.email }
+      Returns: { clientSecret: '...' }
+
+      Deploy: supabase functions deploy create-payment-intent
+    */
+    const res = await fetch(CONFIG.SUPABASE_URL + '/functions/v1/create-payment-intent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + CONFIG.SUPABASE_ANON_KEY },
+      body: JSON.stringify({ amount: 299, currency: 'usd', email: state.googleUser.email }),
+    });
+    const { clientSecret } = await res.json();
+
+    const { paymentIntent, error } = await stripe.confirmCardPayment(clientSecret, {
+      payment_method: { card: cardElement, billing_details: { email: state.googleUser.email } }
+    });
+
+    if (error) {
+      errEl.textContent = error.message;
+      errEl.style.display = 'block';
+      btn.disabled = false;
+      btn.innerHTML = '<svg width="16" height="16" fill="none" viewBox="0 0 24 24"><path d="M12 2l2.09 6.26L20 9.27l-4.91 3.6L16.18 19 12 15.77 7.82 19l1.09-5.13L4 9.27l5.91-.01L12 2z" fill="currentColor"/></svg> Pay $2.99 & get report';
+    } else {
+      state.orderId = paymentIntent.id;
+      onPaymentSuccess();
+    }
+  } catch (err) {
+    errEl.textContent = 'Payment failed — please try again.';
+    errEl.style.display = 'block';
+    btn.disabled = false;
+    btn.innerHTML = 'Pay $2.99 & get report';
+  }
+}
+
+function simulatePayment() {
+  const btn = document.getElementById('pay-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Processing…';
+  state.orderId = 'demo_' + Date.now();
+  setTimeout(() => onPaymentSuccess(), 1800);
+}
+
+/* ─── PAYPAL ─── */
+function initPayPal() {
+  if (CONFIG.PAYPAL_CLIENT_ID.startsWith('YOUR_')) {
+    document.getElementById('paypal-button-container').innerHTML =
+      '<div style="color:var(--muted);font-size:0.85rem;padding:0.5rem 0;">🔧 Demo mode — add your PayPal Client ID to enable PayPal payments</div>';
+    return;
+  }
+
+  const script = document.createElement('script');
+  // disable-funding hides Pay Later / Venmo which are ineligible and log noise
+  script.src = `https://www.paypal.com/sdk/js?client-id=${CONFIG.PAYPAL_CLIENT_ID}&currency=USD&intent=capture&disable-funding=paylater,venmo`;
+  script.onload = () => {
+    paypal.Buttons({
+      style: { layout: 'vertical', color: 'gold', shape: 'rect', label: 'pay', tagline: false },
+
+      // Server-side order creation — avoids the deprecated actions.order client-side warning.
+      // This calls your Supabase Edge Function "create-paypal-order" which calls PayPal's
+      // Orders API server-to-server and returns the PayPal order ID.
+      async createOrder() {
+        try {
+          const res = await fetch(CONFIG.SUPABASE_URL + '/functions/v1/create-paypal-order', {
+            method: 'POST',
+            headers: {
+              'Content-Type':  'application/json',
+              'Authorization': 'Bearer ' + CONFIG.SUPABASE_ANON_KEY,
+            },
+            body: JSON.stringify({
+              amount:      CONFIG.PRICE_USD,
+              currency:    'USD',
+              description: 'EmailIntel Report',
+              email:       state.googleUser?.email,
+            }),
+          });
+          const text = await res.text();
+          const data = text.length ? JSON.parse(text) : {};
+          if (!data.orderID) throw new Error('No orderID returned');
+          return data.orderID;
+        } catch (err) {
+          console.error('[PayPal createOrder]', err);
+          toast('⚠️ Could not start PayPal order — try card instead.');
+          throw err;
+        }
+      },
+
+      // Server-side capture — avoids the deprecated actions.order.capture() warning.
+      async onApprove(data) {
+        try {
+          const res = await fetch(CONFIG.SUPABASE_URL + '/functions/v1/capture-paypal-order', {
+            method: 'POST',
+            headers: {
+              'Content-Type':  'application/json',
+              'Authorization': 'Bearer ' + CONFIG.SUPABASE_ANON_KEY,
+            },
+            body: JSON.stringify({ orderID: data.orderID }),
+          });
+          const text = await res.text();
+          const result = text.length ? JSON.parse(text) : {};
+          state.orderId = data.orderID;
+          onPaymentSuccess();
+        } catch (err) {
+          console.error('[PayPal onApprove]', err);
+          toast('⚠️ Payment capture failed — please try again.');
+        }
+      },
+
+      onError(err) {
+        toast('⚠️ PayPal error — please try card instead.');
+        console.error('[PayPal]', err);
+      }
+    }).render('#paypal-button-container');
+  };
+  document.head.appendChild(script);
+}
+
+/* ─── Payment success handler ─── */
+async function onPaymentSuccess() {
+  await saveLead({ status: 'paid', order_id: state.orderId });
+  await triggerReportEmail();
+  document.getElementById('success-email-display').textContent = state.googleUser.email;
+  goTo('page-success');
+
+  await supabase('POST', '/rest/v1/payments', {
+  lead_id:      null, // optional: store lead id if you track it
+  provider:     state.orderId.startsWith('demo_') ? 'stripe' : 'stripe',
+  order_id:     state.orderId,
+  amount_cents: 299,
+  status:       'completed',
+});
+}
+
+/* ─── Restart ─── */
+function restartApp() {
+  state.searchEmail = '';
+  state.googleUser  = null;
+  state.orderId     = null;
+  document.getElementById('search-input').value = '';
+  document.getElementById('search-input').classList.remove('error');
+  goTo('page-search');
+}
+</script>
+
+<!-- ============================================================
+     SUPABASE SETUP GUIDE (read this before going live)
+     ============================================================
+
+  1. Create a Supabase project at supabase.com
+
+  2. Run this SQL in the Supabase SQL editor to create the leads table:
+
+     create table leads (
+       id            uuid default gen_random_uuid() primary key,
+       target_email  text,
+       google_email  text,
+       google_name   text,
+       google_sub    text,
+       status        text,
+       order_id      text,
+       created_at    timestamptz default now()
+     );
+     alter table leads enable row level security;
+     create policy "insert only" on leads for insert with check (true);
+
+  3. Edge Function — create-payment-intent
+     File: supabase/functions/create-payment-intent/index.ts
+
+     import Stripe from 'https://esm.sh/stripe@13?target=deno'
+     import { serve } from 'https://deno.land/std/http/server.ts'
+
+     const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, { apiVersion: '2023-10-16' })
+     serve(async (req) => {
+       const { amount, currency, email } = await req.json()
+       const intent = await stripe.paymentIntents.create({ amount, currency, receipt_email: email })
+       return new Response(JSON.stringify({ clientSecret: intent.client_secret }), {
+         headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+       })
+     })
+
+  4. Edge Function — send-report
+     File: supabase/functions/send-report/index.ts
+
+     import { serve } from 'https://deno.land/std/http/server.ts'
+
+     serve(async (req) => {
+       const { targetEmail, googleEmail, orderId } = await req.json()
+       // TODO: run your OSINT / scraping logic here, then email result via Resend:
+       const resendRes = await fetch('https://api.resend.com/emails', {
+         method: 'POST',
+         headers: { 'Authorization': `Bearer ${Deno.env.get('RESEND_API_KEY')}`, 'Content-Type': 'application/json' },
+         body: JSON.stringify({
+           from: 'reports@yourdomain.com',
+           to:   googleEmail,
+           subject: `Your EmailIntel report for ${targetEmail}`,
+           html: `<h1>Report ready</h1><p>Scanned: ${targetEmail}</p><p>Order: ${orderId}</p>`
+         })
+       })
+       return new Response(JSON.stringify({ ok: true }), {
+         headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+       })
+     })
+
+  5. Set env secrets in Supabase:
+     supabase secrets set STRIPE_SECRET_KEY=sk_live_...
+     supabase secrets set RESEND_API_KEY=re_...
+
+  6. Deploy both functions:
+     supabase functions deploy create-payment-intent
+     supabase functions deploy send-report
+
+============================================================ -->
+
+</body>
+</html>
