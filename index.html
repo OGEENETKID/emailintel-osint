@@ -614,8 +614,47 @@ function _ensureGoogleInit() {
 }
 
 document.getElementById('google-signin-btn').addEventListener('click', () => {
+  const btn = document.getElementById('google-signin-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Opening Google sign-in…';
+
+  if (typeof google === 'undefined' || !google?.accounts?.id) {
+    toast('⚠️ Google Sign-In failed to load. Check your internet connection.');
+    btn.disabled = false;
+    btn.innerHTML = '<img src="https://lh3.googleusercontent.com/COxitqgJr1sJnIDe8-jiKhxDx1FrYbtRHKJ9z_hELisAlapwE9LoxP1BHh0vRd5e8UGmvR1dMIQtzL2I-MxPPuDdBe7hVkXXK8" alt="Google"> Continue with Google';
+    return;
+  }
+
   _ensureGoogleInit();
-  google.accounts.id.prompt();
+
+  function resetBtn() {
+    btn.disabled = false;
+    btn.innerHTML = '<img src="https://lh3.googleusercontent.com/COxitqgJr1sJnIDe8-jiKhxDx1FrYbtRHKJ9z_hELisAlapwE9LoxP1BHh0vRd5e8UGmvR1dMIQtzL2I-MxPPuDdBe7hVkXXK8" alt="Google"> Continue with Google';
+  }
+
+  google.accounts.id.prompt((notification) => {
+    if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+      // One Tap blocked by browser — fall back to OAuth popup
+      try {
+        const client = google.accounts.oauth2.initTokenClient({
+          client_id: CONFIG.GOOGLE_CLIENT_ID,
+          scope: 'email profile openid',
+          callback: async (tokenResponse) => {
+            if (tokenResponse.error) { toast('⚠️ Sign-in cancelled.'); resetBtn(); return; }
+            try {
+              const res  = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+                headers: { 'Authorization': 'Bearer ' + tokenResponse.access_token }
+              });
+              const user = await res.json();
+              state.googleUser = { email: user.email, name: user.name, picture: user.picture, sub: user.sub };
+              onGoogleSignedIn();
+            } catch(e) { toast('⚠️ Could not fetch Google profile. Try again.'); resetBtn(); }
+          },
+        });
+        client.requestAccessToken();
+      } catch(e) { toast('⚠️ Google sign-in unavailable. Try a different browser.'); resetBtn(); }
+    }
+  });
 });
 
 function onGoogleSignedIn() {
@@ -643,22 +682,30 @@ function switchPayTab(tab) {
 let stripe, cardElement;
 
 function initStripe() {
-  if (CONFIG.STRIPE_PUB_KEY.startsWith('pk_live_YOUR') || CONFIG.STRIPE_PUB_KEY.startsWith('pk_test_YOUR')) {
-    // Demo mode — show simulated card UI
+  const isPlaceholder = !CONFIG.STRIPE_PUB_KEY ||
+    CONFIG.STRIPE_PUB_KEY.includes('YOUR') ||
+    CONFIG.STRIPE_PUB_KEY === '';
+
+  if (isPlaceholder) {
     document.getElementById('stripe-card-element').innerHTML =
       '<div style="color:var(--muted);font-size:0.85rem;padding:0.2rem 0;">🔧 Demo mode — add your Stripe key to enable real payments</div>';
-    document.getElementById('pay-btn').addEventListener('click', simulatePayment);
+    document.getElementById('pay-btn').onclick = simulatePayment;
     return;
   }
 
-  stripe = Stripe(CONFIG.STRIPE_PUB_KEY);
-  const elements = stripe.elements({ appearance: { theme: 'night' } });
-  cardElement = elements.create('card', {
-    style: { base: { color: '#e8edf5', fontFamily: 'Inter, sans-serif', fontSize: '16px', '::placeholder': { color: '#6b829e' } } }
-  });
-  cardElement.mount('#stripe-card-element');
-
-  document.getElementById('pay-btn').addEventListener('click', handleStripePayment);
+  try {
+    stripe = Stripe(CONFIG.STRIPE_PUB_KEY);
+    const elements = stripe.elements({ appearance: { theme: 'night' } });
+    cardElement = elements.create('card', {
+      style: { base: { color: '#e8edf5', fontFamily: 'Inter, sans-serif', fontSize: '16px', '::placeholder': { color: '#6b829e' } } }
+    });
+    cardElement.mount('#stripe-card-element');
+    document.getElementById('pay-btn').onclick = handleStripePayment;
+  } catch(e) {
+    console.error('[Stripe init]', e);
+    document.getElementById('stripe-card-element').innerHTML =
+      '<div style="color:#f87171;font-size:0.85rem;padding:0.2rem 0;">⚠️ Stripe failed to load. Check your API key.</div>';
+  }
 }
 
 async function handleStripePayment() {
@@ -714,12 +761,15 @@ function simulatePayment() {
 }
 
 /* ─── PAYPAL ─── */
+let _paypalRendered = false;
 function initPayPal() {
-  if (CONFIG.PAYPAL_CLIENT_ID.startsWith('YOUR_')) {
+  if (_paypalRendered) return; // prevent duplicate render on repeat sign-in
+  if (!CONFIG.PAYPAL_CLIENT_ID || CONFIG.PAYPAL_CLIENT_ID.startsWith('YOUR_')) {
     document.getElementById('paypal-button-container').innerHTML =
       '<div style="color:var(--muted);font-size:0.85rem;padding:0.5rem 0;">🔧 Demo mode — add your PayPal Client ID to enable PayPal payments</div>';
     return;
   }
+  _paypalRendered = true;
 
   const script = document.createElement('script');
   // disable-funding hides Pay Later / Venmo which are ineligible and log noise
@@ -795,8 +845,10 @@ async function onPaymentSuccess() {
   goTo('page-success');
 
   await supabase('POST', '/rest/v1/payments', {
-  lead_id:      null, // optional: store lead id if you track it
-  provider:     state.orderId.startsWith('demo_') ? 'stripe' : 'stripe',
+  lead_id:      null,
+  provider:     state.orderId.startsWith('demo_') ? 'demo'
+              : state.orderId.startsWith('pi_')   ? 'stripe'
+              : 'paypal',
   order_id:     state.orderId,
   amount_cents: 299,
   status:       'completed',
@@ -815,72 +867,27 @@ function restartApp() {
 </script>
 
 <!-- ============================================================
-     SUPABASE SETUP GUIDE (read this before going live)
-     ============================================================
+     SETUP GUIDE -- see README.md in the project bundle for the
+     full walkthrough. Quick summary:
 
-  1. Create a Supabase project at supabase.com
-
-  2. Run this SQL in the Supabase SQL editor to create the leads table:
-
-     create table leads (
-       id            uuid default gen_random_uuid() primary key,
-       target_email  text,
-       google_email  text,
-       google_name   text,
-       google_sub    text,
-       status        text,
-       order_id      text,
-       created_at    timestamptz default now()
-     );
-     alter table leads enable row level security;
-     create policy "insert only" on leads for insert with check (true);
-
-  3. Edge Function — create-payment-intent
-     File: supabase/functions/create-payment-intent/index.ts
-
-     import Stripe from 'https://esm.sh/stripe@13?target=deno'
-     import { serve } from 'https://deno.land/std/http/server.ts'
-
-     const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, { apiVersion: '2023-10-16' })
-     serve(async (req) => {
-       const { amount, currency, email } = await req.json()
-       const intent = await stripe.paymentIntents.create({ amount, currency, receipt_email: email })
-       return new Response(JSON.stringify({ clientSecret: intent.client_secret }), {
-         headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-       })
-     })
-
-  4. Edge Function — send-report
-     File: supabase/functions/send-report/index.ts
-
-     import { serve } from 'https://deno.land/std/http/server.ts'
-
-     serve(async (req) => {
-       const { targetEmail, googleEmail, orderId } = await req.json()
-       // TODO: run your OSINT / scraping logic here, then email result via Resend:
-       const resendRes = await fetch('https://api.resend.com/emails', {
-         method: 'POST',
-         headers: { 'Authorization': `Bearer ${Deno.env.get('RESEND_API_KEY')}`, 'Content-Type': 'application/json' },
-         body: JSON.stringify({
-           from: 'reports@yourdomain.com',
-           to:   googleEmail,
-           subject: `Your EmailIntel report for ${targetEmail}`,
-           html: `<h1>Report ready</h1><p>Scanned: ${targetEmail}</p><p>Order: ${orderId}</p>`
-         })
-       })
-       return new Response(JSON.stringify({ ok: true }), {
-         headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-       })
-     })
-
-  5. Set env secrets in Supabase:
-     supabase secrets set STRIPE_SECRET_KEY=sk_live_...
-     supabase secrets set RESEND_API_KEY=re_...
-
-  6. Deploy both functions:
-     supabase functions deploy create-payment-intent
-     supabase functions deploy send-report
-
+     1. supabase db: run schema.sql (leads + payments tables)
+     2. supabase functions deploy create-payment-intent
+        supabase functions deploy create-paypal-order
+        supabase functions deploy capture-paypal-order
+        supabase functions deploy send-report
+     3. supabase secrets set STRIPE_SECRET_KEY=sk_...
+        supabase secrets set PAYPAL_CLIENT_ID=...
+        supabase secrets set PAYPAL_SECRET=...
+        supabase secrets set PAYPAL_BASE_URL=https://api-m.paypal.com
+        supabase secrets set RESEND_API_KEY=re_...
+        supabase secrets set RESEND_FROM=reports@yourdomain.com
+     4. Verify your sending domain in Resend before going live --
+        unverified domains will fail to deliver to real inboxes.
+     5. WARNING: The CONFIG block above (Stripe publishable key,
+        PayPal client ID, Supabase anon key) is PUBLIC by design --
+        these are safe to expose client-side. Your SECRET keys
+        (STRIPE_SECRET_KEY, PAYPAL_SECRET, RESEND_API_KEY) must
+        only ever live in Supabase secrets, never in this file.
 ============================================================ -->
 
 </body>
